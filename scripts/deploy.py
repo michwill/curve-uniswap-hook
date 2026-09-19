@@ -30,10 +30,10 @@ def main():
     rpc, chain = chains.resolve(opts.network, opts.rpc)
 
     if opts.live:
-        boa.set_network_env(rpc)
+        hooks.use_network(rpc)
         boa.env.add_account(hooks.load_account(opts.keystore), force_eoa=True)
     else:
-        boa.fork(rpc, block_identifier="latest")
+        hooks.use_fork(rpc)
 
     admin = boa.env.eoa
     implementation, factory = hooks.deploy_factory(admin, chain)

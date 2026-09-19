@@ -39,10 +39,10 @@ def main():
     if opts.live:
         if "factory" not in deployment:
             parser.error(f"no {chain.name} factory in deployments.json: run scripts/deploy.py --live first")
-        boa.set_network_env(rpc)
+        hooks.use_network(rpc)
         boa.env.add_account(hooks.load_account(opts.keystore), force_eoa=True)
     else:
-        boa.fork(rpc, block_identifier="latest")
+        hooks.use_fork(rpc)
 
     if "factory" in deployment:
         factory = hooks.contract(hooks.FACTORY_SOURCE).at(deployment["factory"])

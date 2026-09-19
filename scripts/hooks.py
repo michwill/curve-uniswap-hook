@@ -11,6 +11,9 @@ from pathlib import Path
 import boa
 import requests
 import vyper
+from boa.environment import Env
+from boa.network import NetworkEnv
+from boa.rpc import EthereumRPC, RPCError
 from eth_abi import encode
 from eth_account import Account
 from eth_hash.auto import keccak
@@ -42,6 +45,107 @@ warnings.filterwarnings("ignore", message="casted bytecode does not match compil
 # relative to ROOT: these paths end up in verified sources
 HOOK_SOURCE = "contracts/CurveHook.vy"
 FACTORY_SOURCE = "contracts/CurveHookFactory.vy"
+
+
+class PinnedRPC(EthereumRPC):
+    """
+    boa's RPC client for load-balanced nodes (e.g. drpc), whose backends lag each other.
+
+    It keeps `head`, the highest block any answer has shown to exist (latest blocks,
+    receipts of our transactions), and never lets a read see an older chain:
+    - state reads at "latest" are pinned to `head`, so the nonce read right after our
+      transaction is mined cannot come from a backend that has not seen it;
+    - a backend answering with a latest block below `head`, or not knowing a block at
+      or below `head`, is lagging, and the read is asked again.
+    Anything else, including a rejected transaction, is raised at once; sends are never retried.
+    """
+    BLOCK_PARAM = {"eth_getTransactionCount": 1, "eth_getBalance": 1, "eth_getCode": 1,
+                   "eth_getStorageAt": 2, "eth_call": 1, "eth_getBlockByNumber": 0}
+    LAGGING = ("unknown block", "header not found", "block not found")
+    SENDS = {"eth_sendRawTransaction", "eth_sendTransaction"}
+    RETRIES = 40  # half a second apart
+
+    def __init__(self, url):
+        super().__init__(url)
+        self.head = 0
+
+    def fetch(self, method, params):
+        if method in self.SENDS:
+            return super().fetch(method, params)
+        return self._read(lambda requests: [EthereumRPC.fetch(self, *requests[0])], [(method, params)])[0]
+
+    def fetch_multi(self, payloads):
+        if any(method in self.SENDS for method, _ in payloads):
+            return super().fetch_multi(payloads)
+        return self._read(lambda requests: EthereumRPC.fetch_multi(self, requests), payloads)
+
+    def _read(self, send, requests):
+        for attempt in range(self.RETRIES):
+            pinned = [self._pin(method, params) for method, params in requests]
+            try:
+                results = send(pinned)
+            except RPCError as e:
+                if attempt + 1 < self.RETRIES and self._lagging(e, pinned):
+                    time.sleep(0.5)
+                    continue
+                raise
+            if not any(self._behind(method, params, r) for (method, params), r in zip(pinned, results)):
+                for (method, _), r in zip(pinned, results):
+                    self._observe(method, r)
+                return results
+            time.sleep(0.5)
+        raise RuntimeError(f"{self.name} stays behind block {self.head}")
+
+    def _pin(self, method, params):
+        i = self.BLOCK_PARAM.get(method)
+        if i is None or method == "eth_getBlockByNumber" or not self.head or len(params) <= i or params[i] != "latest":
+            return method, params
+        return method, [*params[:i], hex(self.head), *params[i + 1:]]
+
+    def _block(self, method, params):
+        i = self.BLOCK_PARAM.get(method)
+        if i is not None and len(params) > i and isinstance(params[i], str) and params[i].startswith("0x"):
+            return int(params[i], 16)
+        return None
+
+    def _lagging(self, error, requests):
+        # "unknown block" is only lag if every block asked about is one we know exists
+        blocks = [self._block(method, params) for method, params in requests]
+        return any(lag in str(error).lower() for lag in self.LAGGING) and \
+            all(b <= self.head for b in blocks if b is not None)
+
+    def _behind(self, method, params, result):
+        if method == "eth_blockNumber":
+            return int(result, 16) < self.head
+        if method == "eth_getBlockByNumber":
+            if result is None:  # a lagging backend answers null for a block it has not seen
+                block = self._block(method, params)
+                return block is not None and block <= self.head
+            return params[0] == "latest" and int(result["number"], 16) < self.head
+        return False
+
+    def _observe(self, method, result):
+        if method == "eth_blockNumber":
+            block = int(result, 16)
+        elif method == "eth_getBlockByNumber" and result:
+            block = int(result["number"], 16)
+        elif method == "eth_getTransactionReceipt" and result:
+            block = int(result["blockNumber"], 16)
+        else:
+            return
+        self.head = max(self.head, block)
+
+
+def use_network(rpc_url):
+    """Send real transactions through rpc_url."""
+    boa.set_env(NetworkEnv(PinnedRPC(rpc_url)))
+
+
+def use_fork(rpc_url):
+    """Simulate on a fork of rpc_url's latest block."""
+    env = Env()
+    env.fork_rpc(PinnedRPC(rpc_url), block_identifier="latest")
+    boa.set_env(env)
 
 
 def contract(source):

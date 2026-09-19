@@ -34,7 +34,7 @@ def pytest_configure(config):
     global CHAIN, UNIVERSAL_ROUTER, V4_QUOTER
     rpc, CHAIN = chains.resolve(config.getoption("network"))
     UNIVERSAL_ROUTER, V4_QUOTER = CHAIN.universal_router, CHAIN.v4_quoter
-    boa.fork(rpc, block_identifier="latest")
+    hooks.use_fork(rpc)
 
 
 @pytest.fixture(scope="session")
