@@ -70,13 +70,10 @@ def main():
     opts = parser.parse_args()
 
     rpc = watch.RPC(opts.rpc)
-    factory = opts.factory
+    # the factory also resolves hooks given by address; hooks it does not know are standalone ones
+    factory = to_checksum_address(opts.factory) if opts.factory else watch.default_factory(rpc)
     if not factory and not opts.hooks:
-        from hooks import load_deployment
-        factory = load_deployment(int(rpc("eth_chainId"), 16)).get("factory")
-        if not factory:
-            parser.error("no factory in deployments.json: pass --factory or hook addresses")
-    factory = factory and to_checksum_address(factory)
+        parser.error("no factory in deployments.json: pass --factory or hook addresses")
     hooks = [to_checksum_address(h) for h in opts.hooks or factory_hooks(rpc, factory)]
 
     info = watch.Watcher(rpc, 0, factory)  # for the hooks' token pairs, timestamps and formatting
@@ -85,10 +82,10 @@ def main():
         if opts.from_block is not None:
             start = opts.from_block
         else:
-            start = watch.creation_block(factory) if factory else min(watch.creation_block(h) for h in hooks)
+            start = min(watch.creation_block(h) for h in hooks) if opts.hooks else watch.creation_block(factory)
         swaps = swaps_by_hook(rpc, hooks, start)
 
-    print(f"{'factory ' + factory + ': ' if factory else ''}{len(hooks)} hook{'' if len(hooks) == 1 else 's'}")
+    print(f"{'' if opts.hooks else 'factory ' + factory + ': '}{len(hooks)} hook{'' if len(hooks) == 1 else 's'}")
     for hook in hooks:
         token0, token1 = info.add(hook)
         pool = (try_call(rpc, hook, "curve_pool()", ["address"]) or try_call(rpc, hook, "CURVE_POOL()", ["address"]))[0]

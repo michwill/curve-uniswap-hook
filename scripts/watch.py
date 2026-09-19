@@ -84,6 +84,14 @@ def creation_block(address):
     return int(r["result"][0]["blockNumber"])
 
 
+def default_factory(rpc):
+    """The factory in deployments.json for the RPC's chain, if any."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from hooks import load_deployment
+    factory = load_deployment(int(rpc("eth_chainId"), 16)).get("factory")
+    return factory and to_checksum_address(factory)
+
+
 def get_logs(rpc, addresses, start, end):
     try:
         return rpc("eth_getLogs", {"address": addresses, "topics": [TOPIC], "fromBlock": hex(start), "toBlock": hex(end)})
@@ -95,9 +103,13 @@ def get_logs(rpc, addresses, start, end):
 
 
 class Watcher:
-    def __init__(self, rpc, start, factory=None, hooks=()):
+    def __init__(self, rpc, start, factory=None, hooks=(), follow_factory=True):
+        """
+        factory: where hooks' pool keys are looked up; follow_factory: also watch every hook it creates
+        """
         self.rpc = rpc
         self.factory = factory
+        self.follow_factory = follow_factory and bool(factory)
         self.last_block = start - 1  # last block fully scanned and printed
         self.pairs = {}  # hook -> (token0, token1)
         self.factory_hooks = 0
@@ -127,7 +139,7 @@ class Watcher:
 
     def refresh(self):
         """Pick up hooks the factory created since the last look."""
-        if not self.factory:
+        if not self.follow_factory:
             return
         count = self.rpc.call(self.factory, "hook_count()", ["uint256"])[0]
         for n in range(self.factory_hooks, count):
@@ -201,21 +213,17 @@ def main():
     opts = parser.parse_args()
 
     rpc = RPC(opts.rpc)
-    factory = opts.factory
+    # the factory also resolves hooks given by address; hooks it does not know are standalone ones
+    factory = to_checksum_address(opts.factory) if opts.factory else default_factory(rpc)
     if not factory and not opts.hooks:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from hooks import load_deployment
-        factory = load_deployment(int(rpc("eth_chainId"), 16)).get("factory")
-        if not factory:
-            parser.error("no factory in deployments.json: pass --factory or hook addresses")
-    factory = factory and to_checksum_address(factory)
+        parser.error("no factory in deployments.json: pass --factory or hook addresses")
 
     if opts.from_block is not None:
         start = opts.from_block
     else:
-        start = creation_block(factory) if factory else min(creation_block(h) for h in opts.hooks)
-    watcher = Watcher(rpc, start, factory, opts.hooks)
-    print(f"{'factory ' + factory if factory else 'hooks'} from block {start}\n", flush=True)
+        start = min(creation_block(h) for h in opts.hooks) if opts.hooks else creation_block(factory)
+    watcher = Watcher(rpc, start, factory, opts.hooks, follow_factory=not opts.hooks)
+    print(f"{'hooks' if opts.hooks else 'factory ' + factory} from block {start}\n", flush=True)
 
     history_done = False
     try:
