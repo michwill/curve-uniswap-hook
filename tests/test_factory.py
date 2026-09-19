@@ -35,7 +35,8 @@ def test_registry(factory, hook):
 
 def test_hook_created_event(factory):
     hook = hooks.create_hook(factory, THREEPOOL, 1, 2)
-    [ev] = [e for e in factory.get_logs() if type(e).__name__ == "HookCreated"]
+    # strict=False: the hook's approvals log token events other modules may not decode
+    [ev] = [e for e in factory.get_logs(strict=False) if type(e).__name__ == "HookCreated"]
     key = factory.pool_key(hook.address)
     assert (ev.curve_pool, ev.hook, "0x" + ev.pool_id.hex()) == (THREEPOOL, hook.address, hooks.pool_id(key))
     assert (ev.currency0, ev.currency1, ev.i0, ev.i1, ev.kind) == (key[0], key[1], 1, 2, 0)

@@ -21,3 +21,8 @@ def balances(i: uint256) -> uint256:
 @external
 def exchange(i: int128, j: int128, dx: uint256, min_dy: uint256) -> uint256:
     ...
+
+@external
+@view
+def admin_balances(i: uint256) -> uint256:
+    ...

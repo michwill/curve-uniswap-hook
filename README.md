@@ -76,6 +76,10 @@ fork first, so pools can be tried before anything is deployed.
 On chain: `get_hook(pool, i, j)` (coins in either order), `hook_count()`,
 `hooks(n)`, `pool_key(hook)`, and a `HookCreated` event per hook.
 
+`uv run pytest tests/test_live_hooks.py` then checks every hook of the deployed
+factory on a fork of current state: its deployment, and swaps both ways through
+the Universal Router.
+
 ## Watch activity
 
 ```
@@ -92,8 +96,10 @@ load-balanced nodes lag each other.
 ## Limitations
 
 - **The input comes out of the PoolManager's own balance** before the swapper
-  pays it in. For tokens the PoolManager holds little of, routers have to
-  settle the input before the swap, and the v4 Quoter cannot simulate the swap.
+  pays it in, so selling a token through a hook is capped by what all of v4
+  holds of it (about 1.6k crvUSD in September 2026) unless the router settles
+  the input before the swap, and the v4 Quoter cannot simulate larger sales.
+  Buying is not affected.
 - **Rebasing coins (stETH)** work for exact input only. They arrive a wei or two
   short, so exact output reverts, and stETH input has to be paid in before the
   swap with a couple of spare wei (the Universal Router's `SETTLE_ALL` pays the

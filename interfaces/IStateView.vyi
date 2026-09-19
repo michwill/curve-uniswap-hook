@@ -1,0 +1,9 @@
+@external
+@view
+def getSlot0(pool_id: bytes32) -> (uint160, int24, uint24, uint24):
+    ...
+
+@external
+@view
+def getLiquidity(pool_id: bytes32) -> uint128:
+    ...

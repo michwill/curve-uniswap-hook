@@ -20,3 +20,8 @@ def transfer(to: address, amount: uint256):
 @view
 def totalSupply() -> uint256:
     ...
+
+@external
+@view
+def symbol() -> String[32]:
+    ...

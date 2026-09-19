@@ -44,6 +44,16 @@ def prepay_needed(currency, amount):
     return currency == STETH or (currency != ZERO and balance(currency, hooks.POOL_MANAGER) < 2 * amount)
 
 
+def stray(case, currency, i):
+    """Coins sitting in the pool above its books: exchange_received() swaps them along."""
+    if not case.kind & R:
+        return 0
+    booked = case.curve.balances(i)
+    if not case.kind & C:  # stableswap-ng keeps admin fees in coins
+        booked += case.curve.admin_balances(i)
+    return max(balance(currency, case.curve.address) - booked, 0)
+
+
 def hook_events(router, name):
     return [e for e in router.get_logs(strict=False) if type(e).__name__ == name]
 
@@ -78,6 +88,7 @@ def test_exact_input(case, router, trader, zero_for_one):
     amount = case.curve.balances(i) // 1000
     fund(trader, currency_in, amount + 10)
     expected = case.curve.get_dy(i, j, amount)
+    with_stray = case.curve.get_dy(i, j, amount + stray(case, currency_in, i))
     in_before, out_before = balance(currency_in, trader), balance(currency_out, trader)
 
     swap(router, case.key, zero_for_one, True, amount, 0, trader, prepay_needed(currency_in, amount))
@@ -87,11 +98,11 @@ def test_exact_input(case, router, trader, zero_for_one):
     tolerance = 3 if case.rebasing else 0  # stETH transfers round down a wei or two
     assert abs(paid - amount) <= tolerance
     # legacy pools' get_dy() can overstate exchange() by a wei
-    assert expected - 1 - tolerance <= got <= expected
+    assert expected - 1 - tolerance <= got <= with_stray
 
     [ev] = hook_events(router, "CurveHookSwap")
     assert (ev.sender, ev.origin, ev.zeroForOne, ev.exactInput) == (router.address, trader, zero_for_one, True)
-    assert ev.amountIn == amount and got <= ev.amountOut <= expected
+    assert ev.amountIn == amount and got <= ev.amountOut <= with_stray
 
 
 @pytest.mark.parametrize("zero_for_one", [True, False])
@@ -101,6 +112,10 @@ def test_exact_output(case, router, trader, zero_for_one):
     currency_in, currency_out, i, j = sides(case, zero_for_one)
     amount = case.curve.get_dy(i, j, case.curve.balances(i) // 1000) // 2
     cheapest = min_dx(case.curve, i, j, amount)
+    # The hook overpays by at most one output wei's worth (classic pools aim a wei higher),
+    # give or take a few wei of Curve rounding. Priced before the swap, since a pool that
+    # re-pegs after trading can quote the same output cheaper afterwards.
+    most = min_dx(case.curve, i, j, amount + (1 if case.kind & R else 2)) + 10
     fund(trader, currency_in, 2 * cheapest + 10)
     in_before, out_before = balance(currency_in, trader), balance(currency_out, trader)
 
@@ -108,9 +123,7 @@ def test_exact_output(case, router, trader, zero_for_one):
 
     paid = in_before - balance(currency_in, trader)
     assert balance(currency_out, trader) - out_before == amount
-    # stops once the spare output is < 1 input wei; classic pools aim an output wei higher
-    aimed = amount if case.kind & R else amount + 1
-    assert cheapest <= paid <= min_dx(case.curve, i, j, aimed) + 1
+    assert cheapest <= paid <= most
     [ev] = hook_events(router, "CurveHookSwap")
     assert (ev.exactInput, ev.amountIn, ev.amountOut) == (False, paid, amount)
 
@@ -133,6 +146,6 @@ def test_quoter(case, quoter, zero_for_one):
     if prepay_needed(currency_in, amount) or case.rebasing:
         pytest.skip("the Quoter can only simulate inputs the PoolManager already holds")
     quoted, _ = quoter.quoteExactInputSingle((case.key, zero_for_one, amount, b""))
-    expected = case.curve.get_dy(i, j, amount)
+    expected = case.curve.get_dy(i, j, amount + stray(case, currency_in, i))
     # legacy pools' get_dy() can overstate exchange() by a wei
     assert quoted == expected if case.kind & R else expected - 1 <= quoted <= expected
