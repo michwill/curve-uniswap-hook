@@ -1,0 +1,20 @@
+struct PoolKey:
+    currency0: address
+    currency1: address
+    fee: uint24
+    tickSpacing: int24
+    hooks: address
+
+struct QuoteExactSingleParams:
+    poolKey: PoolKey
+    zeroForOne: bool
+    exactAmount: uint128
+    hookData: Bytes[1024]
+
+@external
+def quoteExactInputSingle(params: QuoteExactSingleParams) -> (uint256, uint256):
+    ...
+
+@external
+def quoteExactOutputSingle(params: QuoteExactSingleParams) -> (uint256, uint256):
+    ...

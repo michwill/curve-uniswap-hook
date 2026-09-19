@@ -1,0 +1,30 @@
+struct PoolKey:
+    currency0: address
+    currency1: address
+    fee: uint24
+    tickSpacing: int24
+    hooks: address
+
+event Initialize:
+    id: indexed(bytes32)
+    currency0: indexed(address)
+    currency1: indexed(address)
+    fee: uint24
+    tickSpacing: int24
+    hooks: address
+    sqrtPriceX96: uint160
+    tick: int24
+
+event Swap:
+    id: indexed(bytes32)
+    sender: indexed(address)
+    amount0: int128
+    amount1: int128
+    sqrtPriceX96: uint160
+    liquidity: uint128
+    tick: int24
+    fee: uint24
+
+@external
+def initialize(key: PoolKey, sqrtPriceX96: uint160) -> int24:
+    ...

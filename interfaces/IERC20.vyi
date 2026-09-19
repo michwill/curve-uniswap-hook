@@ -1,0 +1,22 @@
+@external
+@view
+def balanceOf(owner: address) -> uint256:
+    ...
+
+@external
+@view
+def decimals() -> uint8:
+    ...
+
+@external
+def approve(spender: address, amount: uint256):
+    ...
+
+@external
+def transfer(to: address, amount: uint256):
+    ...
+
+@external
+@view
+def totalSupply() -> uint256:
+    ...

@@ -1,0 +1,3 @@
+@external
+def approve(token: address, spender: address, amount: uint160, expiration: uint48):
+    ...

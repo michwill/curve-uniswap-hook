@@ -1,0 +1,4 @@
+@external
+@payable
+def execute(commands: Bytes[64], inputs: DynArray[Bytes[8192], 16], deadline: uint256):
+    ...
