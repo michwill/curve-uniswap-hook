@@ -18,3 +18,23 @@ def quoteExactInputSingle(params: QuoteExactSingleParams) -> (uint256, uint256):
 @external
 def quoteExactOutputSingle(params: QuoteExactSingleParams) -> (uint256, uint256):
     ...
+
+struct PathKey:
+    intermediateCurrency: address
+    fee: uint24
+    tickSpacing: int24
+    hooks: address
+    hookData: Bytes[1024]
+
+struct QuoteExactParams:
+    exactCurrency: address
+    path: DynArray[PathKey, 8]
+    exactAmount: uint128
+
+@external
+def quoteExactInput(params: QuoteExactParams) -> (uint256, uint256):
+    ...
+
+@external
+def quoteExactOutput(params: QuoteExactParams) -> (uint256, uint256):
+    ...
