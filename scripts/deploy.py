@@ -3,7 +3,8 @@
     uv run python scripts/deploy.py           # dry run on a fork of NETWORK
     uv run python scripts/deploy.py --live    # real deployment from the KEYSTORE account
 
-A live deployment is recorded in deployments.json and verified on Etherscan.
+A live deployment is recorded in deployments.json and verified on Etherscan
+(scripts/verify.py retries a verification that did not go through).
 """
 import argparse
 
@@ -37,10 +38,14 @@ def main():
     if not opts.live:
         print("dry run on a fork, nothing sent")
         return
+    if opts.rpc != NETWORK:
+        # e.g. an anvil fork: it reports mainnet's chain id and would overwrite the real entry
+        print("--rpc is not NETWORK: not recorded in deployments.json, not verified")
+        return
     hooks.save_deployment(hooks.chain_id(opts.rpc), implementation=implementation.address, factory=factory.address)
     if not opts.no_verify:
-        hooks.verify_etherscan(implementation, hooks.HOOK_SOURCE, "CurveHook", encode(["address"], [hooks.POOL_MANAGER]))
-        hooks.verify_etherscan(factory, hooks.FACTORY_SOURCE, "CurveHookFactory", encode(
+        hooks.verify_etherscan(implementation.address, hooks.HOOK_SOURCE, "CurveHook", encode(["address"], [hooks.POOL_MANAGER]))
+        hooks.verify_etherscan(factory.address, hooks.FACTORY_SOURCE, "CurveHookFactory", encode(
             ["address", "address", "address", "address", "address"],
             [hooks.POOL_MANAGER, implementation.address, hooks.STABLESWAP_NG_FACTORY, hooks.TWOCRYPTO_NG_FACTORY,
              str(admin)],

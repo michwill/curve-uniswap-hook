@@ -118,26 +118,51 @@ def pool_id(key) -> str:
     return "0x" + keccak(encode(["(address,address,uint24,int24,address)"], [tuple(key)])).hex()
 
 
-def verify_etherscan(deployed, source, name, ctor_args: bytes):
+ETHERSCAN_API = "https://api.etherscan.io/v2/api"
+
+
+def etherscan(**params):
+    return requests.get(ETHERSCAN_API, timeout=30, params={"chainid": 1, "apikey": ETHERSCAN_API_KEY, **params}).json()
+
+
+def is_verified(address) -> bool:
+    return bool(etherscan(module="contract", action="getsourcecode", address=address)["result"][0]["SourceCode"])
+
+
+def ctor_args_on_chain(address, source) -> bytes:
+    """Constructor arguments of a deployed contract: its creation code past the compiled init code."""
+    creation = etherscan(module="contract", action="getcontractcreation", contractaddresses=address)["result"][0]
+    creation_code = bytes.fromhex(creation["creationBytecode"][2:])
+    initcode = contract(source).compiler_data.bytecode
+    assert creation_code.startswith(initcode), f"{address} was not compiled from {source} as it is now"
+    return creation_code[len(initcode):]
+
+
+def verify_etherscan(address, source, name, ctor_args: bytes):
     std_json = contract(source).solc_json
     payload = {k: std_json[k] for k in ("language", "sources", "settings")}
-    api = "https://api.etherscan.io/v2/api"
     params = {"chainid": 1, "module": "contract", "apikey": ETHERSCAN_API_KEY}
-    r = requests.post(api, params={**params, "action": "verifysourcecode"}, data={
-        "codeformat": "vyper-json",
-        "sourceCode": json.dumps(payload),
-        "contractaddress": deployed.address,
-        "contractname": f"{source}:{name}",
-        "compilerversion": f"vyper:{vyper.__version__}",
-        "optimizationUsed": 1,
-        "constructorArguments": ctor_args.hex(),
-    }).json()
+    # Etherscan cannot find a contract for a while after it is mined
+    for _ in range(12):
+        r = requests.post(ETHERSCAN_API, params={**params, "action": "verifysourcecode"}, data={
+            "codeformat": "vyper-json",
+            "sourceCode": json.dumps(payload),
+            "contractaddress": str(address),
+            "contractname": f"{source}:{name}",
+            "compilerversion": f"vyper:{vyper.__version__}",
+            "optimizationUsed": 1,
+            "constructorArguments": ctor_args.hex(),
+        }).json()
+        if r["status"] == "1" or "Unable to locate ContractCode" not in r["result"]:
+            break
+        print(f"{name}: Etherscan has not indexed {address} yet, retrying in 10s")
+        time.sleep(10)
     if r["status"] != "1":
         print(f"{name}: Etherscan verification not submitted:", r["result"])
         return
     for _ in range(20):
         time.sleep(5)
-        status = requests.get(api, params={**params, "action": "checkverifystatus", "guid": r["result"]}).json()
+        status = etherscan(module="contract", action="checkverifystatus", guid=r["result"])
         if "Pending" not in status["result"]:
             print(f"{name}: Etherscan:", status["result"])
             return

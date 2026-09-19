@@ -54,6 +54,8 @@ uv run python scripts/deploy.py --live    # deploy
 This deploys the `CurveHook` implementation and `CurveHookFactory` (admin: the
 deployer), verifies both on Etherscan and records the addresses in
 `deployments.json`, which the other scripts read. Commit that file.
+If a verification does not go through, `uv run python scripts/verify.py`
+retries whatever in `deployments.json` is not verified yet.
 
 ## Add pools
 
@@ -115,6 +117,7 @@ contracts/CurveHook.vy          hook implementation, cloned per pool and coin pa
 contracts/CurveHookFactory.vy   creates, initializes and records hooks
 scripts/hooks.py                shared helpers: deployment, salt mining, Etherscan verification
 scripts/deploy.py               deploy the implementation and factory
+scripts/verify.py               verify them on Etherscan after the fact
 scripts/create_hook.py          create a hook for a Curve pool
 scripts/list_hooks.py           list hooks, pools and swaps
 scripts/watch.py                follow swaps live
@@ -123,7 +126,8 @@ tests/                          fork tests on real pools of every Curve family
 
 ## Deployments (Ethereum mainnet)
 
-The factory's addresses go in `deployments.json` once deployed.
+Factory `0x7aC4E0995195db15aB745D66806e8370503F9Fd9`, implementation
+`0xaa41422c31a48c11BeA081b5fC95c10E094936d4` (also in `deployments.json`).
 
 Before the factory, a single standalone hook (commit `e0b0a17`) was deployed
 for the USDC/USDT stableswap-ng pool `0x4f493B7dE8aAC7d55F71853688b1F7C8F0243C85`:
