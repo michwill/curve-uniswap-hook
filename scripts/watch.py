@@ -64,7 +64,10 @@ class Token:
             self.decimals = rpc.call(address, "decimals()", ["uint8"])[0]
 
     def fmt(self, amount):
-        return f"{amount / 10**self.decimals:,.{self.decimals}f} {self.symbol}"
+        # integer arithmetic: a float garbles 18-decimal amounts (0.3 ETH -> 0.299999999999999989)
+        whole, fraction = divmod(amount, 10**self.decimals)
+        digits = f".{fraction:0{self.decimals}d}" if self.decimals else ""
+        return f"{whole:,}{digits} {self.symbol}"
 
 
 def label(address):
