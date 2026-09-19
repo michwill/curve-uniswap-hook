@@ -2,5 +2,9 @@
   "1": {
     "implementation": "0xaa41422c31a48c11BeA081b5fC95c10E094936d4",
     "factory": "0x7aC4E0995195db15aB745D66806e8370503F9Fd9"
+  },
+  "4663": {
+    "implementation": "0x06Ce8086965234400FDecAb190B115C2C0717047",
+    "factory": "0x1daB6560494B04473A0BE3E7D83CF3Fdf3a51828"
   }
 }
