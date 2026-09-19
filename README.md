@@ -61,12 +61,13 @@ uv run python scripts/deploy.py --network robinhood --live   # deploy on Robinho
 ```
 
 This deploys the `CurveHook` implementation and `CurveHookFactory` (admin: the
-deployer), verifies both on Etherscan and records the addresses in
+deployer), verifies both on Etherscan and on Sourcify (which Blockscout
+explorers show) and records the addresses in
 `deployments.json` under the chain id, which the other scripts read. Commit
 that file. A deployment through `--rpc` is neither recorded nor verified: an
 anvil fork reports the chain id it forks and would overwrite that chain's entry.
 If a verification does not go through, `uv run python scripts/verify.py`
-retries whatever in `deployments.json` is not verified yet.
+(with `--network`) retries whatever in `deployments.json` is not verified yet.
 
 ## Add pools
 
@@ -136,7 +137,7 @@ contracts/CurveHookFactory.vy   creates, initializes and records hooks
 scripts/chains.py               per-chain addresses, --network, deployments.json
 scripts/hooks.py                shared helpers: deployment, salt mining, Etherscan verification
 scripts/deploy.py               deploy the implementation and factory
-scripts/verify.py               verify them on Etherscan after the fact
+scripts/verify.py               verify them on Etherscan and Sourcify after the fact
 scripts/create_hook.py          create a hook for a Curve pool
 scripts/list_hooks.py           list hooks, pools and swaps
 scripts/watch.py                follow swaps live

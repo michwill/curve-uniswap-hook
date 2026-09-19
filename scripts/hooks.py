@@ -257,3 +257,40 @@ def verify_etherscan(address, source, name, ctor_args: bytes, chain_id):
             print(f"{name}: Etherscan:", status["result"])
             return
     print(f"{name}: Etherscan verification still pending, guid", r["result"])
+
+
+SOURCIFY_API = "https://sourcify.dev/server"
+
+
+def is_verified_sourcify(address, chain_id) -> bool:
+    return bool(requests.get(f"{SOURCIFY_API}/v2/contract/{chain_id}/{address}", timeout=60).json().get("match"))
+
+
+def verify_sourcify(address, source, name, chain_id):
+    """Verify on Sourcify, which Blockscout explorers show as verified too."""
+    std_json = contract(source).solc_json
+    creation = etherscan(chain_id, module="contract", action="getcontractcreation", contractaddresses=address)["result"][0]
+    r = requests.post(f"{SOURCIFY_API}/v2/verify/{chain_id}/{address}", timeout=60, json={
+        "stdJsonInput": {k: std_json[k] for k in ("language", "sources", "settings")},
+        "compilerVersion": std_json["compiler_version"].lstrip("v"),
+        "contractIdentifier": f"{source}:{name}",
+        "creationTransactionHash": creation["txHash"],
+    })
+    if r.status_code == 409:
+        print(f"{name}: Sourcify: already verified")
+        return
+    if r.status_code != 202:
+        print(f"{name}: Sourcify verification not submitted: {r.status_code} {r.text[:300]}")
+        return
+    job = r.json()["verificationId"]
+    for _ in range(60):
+        time.sleep(5)
+        status = requests.get(f"{SOURCIFY_API}/v2/verify/{job}", timeout=60).json()
+        if status.get("isJobCompleted"):
+            if status.get("error"):
+                print(f"{name}: Sourcify: failed: {status['error'].get('message', status['error'])}")
+            else:
+                c = status.get("contract", {})
+                print(f"{name}: Sourcify: {c.get('match')} (creation {c.get('creationMatch')}, runtime {c.get('runtimeMatch')})")
+            return
+    print(f"{name}: Sourcify verification still running, job {job}")

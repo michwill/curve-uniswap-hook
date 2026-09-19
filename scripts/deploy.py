@@ -6,7 +6,8 @@
     uv run python scripts/deploy.py --live --rpc http://127.0.0.1:8545 --no-verify   # e.g. anvil
 
 A live deployment to a --network is recorded in deployments.json and verified on Etherscan
-(scripts/verify.py retries a verification that did not go through). With --rpc it is neither:
+and on Sourcify, which Blockscout explorers show (scripts/verify.py retries a verification
+that did not go through). With --rpc it is neither:
 an anvil fork reports the chain id it forks and would overwrite that chain's entry.
 """
 import argparse
@@ -53,6 +54,8 @@ def main():
                                encode(["address"], [chain.pool_manager]), chain.chain_id)
         hooks.verify_etherscan(factory.address, hooks.FACTORY_SOURCE, "CurveHookFactory", encode(
             ["address"] * 5, hooks.factory_ctor_args(chain, implementation.address, str(admin))), chain.chain_id)
+        hooks.verify_sourcify(implementation.address, hooks.HOOK_SOURCE, "CurveHook", chain.chain_id)
+        hooks.verify_sourcify(factory.address, hooks.FACTORY_SOURCE, "CurveHookFactory", chain.chain_id)
 
 
 if __name__ == "__main__":
