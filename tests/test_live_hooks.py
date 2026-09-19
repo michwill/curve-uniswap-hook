@@ -10,11 +10,11 @@ from eth_abi import encode
 from vyper.builtins.functions import eip1167_bytecode
 
 import hooks
-from conftest import SETTLE_ALL, STETH, TAKE_ALL, V4_SWAP, ZERO, balance, fund
+from chains import load_deployment
+from conftest import CHAIN, SETTLE_ALL, STETH, TAKE_ALL, V4_SWAP, ZERO, balance, fund
 # the swap checks of test_swaps, run here against the deployed hooks
 from test_swaps import test_exact_input, test_exact_output, test_hook_swap_event, test_quoter  # noqa: F401
 
-STATE_VIEW = "0x7fFE42C4a5DEeA5b0feC41C94C136Cf115597227"
 USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 CRVUSD = "0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E"
 WBTC = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
@@ -22,7 +22,7 @@ USDC_CRVUSD = "0x4DEcE678ceceb27446b35C672dC7d61F30bAD69E"  # coins USDC, crvUSD
 YB_WBTC = "0x313698667d7FDD6789a9BC70821309ff891E729A"  # coins crvUSD, WBTC
 SWAP_EXACT_IN = 0x07
 NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-FACTORY = hooks.load_deployment(1).get("factory")
+FACTORY = load_deployment(CHAIN.chain_id).get("factory")
 
 
 def symbol(currency):
@@ -42,6 +42,8 @@ LIVE = live_hooks()
 
 @pytest.fixture(scope="module")
 def live_factory():
+    if not FACTORY:
+        pytest.skip(f"no {CHAIN.name} factory in deployments.json")
     return hooks.contract(hooks.FACTORY_SOURCE).at(FACTORY)
 
 
@@ -71,7 +73,7 @@ def test_deployment(case, live_factory):
     assert key[2:4] == (0, 1) and key[4] == hook.address
 
     # the v4 pool exists and holds no liquidity of its own
-    state = hooks.interface("IStateView").at(STATE_VIEW)
+    state = hooks.interface("IStateView").at(CHAIN.state_view)
     pool_id = bytes.fromhex(hooks.pool_id(key)[2:])
     sqrt_price, *_ = state.getSlot0(pool_id)
     assert sqrt_price > 0
@@ -81,6 +83,8 @@ def test_deployment(case, live_factory):
 @pytest.fixture(scope="module")
 def route(live_factory):
     """USDC -> crvUSD -> WBTC through two live hooks, a crvUSD sale the PoolManager alone could not fund."""
+    if CHAIN.chain_id != 1:
+        pytest.skip("an Ethereum route")
     first, second = live_factory.get_hook(USDC_CRVUSD, 0, 1), live_factory.get_hook(YB_WBTC, 0, 1)
     if ZERO in (first, second):
         pytest.skip("the route's hooks are not deployed")
@@ -89,7 +93,7 @@ def route(live_factory):
 
 def test_multihop_exact_input_past_the_cap(route, quoter, router, trader):
     # the first hop has Curve pay crvUSD into the PoolManager, so the second can take more than v4 holds
-    held = balance(CRVUSD, hooks.POOL_MANAGER)
+    held = balance(CRVUSD, CHAIN.pool_manager)
     amount = 3 * held // 10**12 + 10**6  # USDC worth about three times v4's crvUSD
     first_pool = hooks.interface("IStableSwapNG").at(USDC_CRVUSD)
     second_pool = hooks.interface("ICurveCrypto").at(YB_WBTC)
@@ -115,7 +119,7 @@ def test_multihop_exact_input_past_the_cap(route, quoter, router, trader):
 
 def test_multihop_exact_output_is_capped(route, quoter):
     # exact-output paths run their last hop first: crvUSD -> WBTC must take crvUSD before any came in
-    held = balance(CRVUSD, hooks.POOL_MANAGER)
+    held = balance(CRVUSD, CHAIN.pool_manager)
     second_pool = hooks.interface("ICurveCrypto").at(YB_WBTC)
     path = [(USDC, 0, 1, route[0], b""), (CRVUSD, 0, 1, route[1], b"")]
     if held // 2:

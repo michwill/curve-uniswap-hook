@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pytest
 
 import hooks
-from conftest import STETH, ZERO, balance, fund, swap
+from conftest import CHAIN, STETH, ZERO, balance, fund, swap
 
 C, R, D = hooks.KIND_CRYPTO, hooks.KIND_RECEIVED, hooks.KIND_GET_DX
-POOLS = [
-    # name, Curve pool, coin indices, expected kind
+# name, Curve pool, coin indices, expected kind; per chain id
+ETHEREUM_POOLS = [
     ("stableswap-ng USDC/USDT", "0x4f493B7dE8aAC7d55F71853688b1F7C8F0243C85", 0, 1, R | D),
     ("twocrypto-ng crvUSD/WBTC", "0x313698667d7fdd6789a9bc70821309ff891e729a", 0, 1, C | R | D),
     ("tricrypto-ng WBTC/WETH", "0x7f86bf177dd4f3494b841a37e810a34dd56c829b", 1, 2, C | D),
@@ -19,6 +19,13 @@ POOLS = [
     ("steth ETH/stETH", "0xDC24316b9AE028F1497c275EB9192a3Ea0f67022", 0, 1, 0),
     ("stableswap-ng pxETH/stETH (rebasing)", "0x6951bdc4734b9f7f3e1b74afebc670c736a0edb6", 0, 1, D),
 ]
+ROBINHOOD_POOLS = [
+    ("stableswap-ng wstETH/WETH", "0x1E8D78e9b3f0152D54d32904B7933f1cFE439Df1", 0, 1, R | D),
+    ("stableswap-ng GREEN/USDG", "0x2fD13b49F970e8C6D89283056C1c6281214b7EB6", 0, 1, R | D),
+    ("twocrypto-ng NVDA/USDG", "0xE080D14bF6eceC4C48eBe11055d4DeA5DbC30e41", 0, 1, C | R | D),
+    ("tricrypto-ng NVDA/AMD/SNDK", "0xB1DA9708C0827F59C636b6e1eDffC4b0d5b30499", 0, 1, C | D),
+]
+POOLS = {1: ETHEREUM_POOLS, 4663: ROBINHOOD_POOLS}.get(CHAIN.chain_id, [])
 
 
 @pytest.fixture(scope="module", params=POOLS, ids=[p[0] for p in POOLS])
@@ -41,7 +48,7 @@ def prepay_needed(currency, amount):
     # The hook takes the input out of the PoolManager's own balance before the swapper pays.
     # A rebasing coin also has to be prepaid with spare wei: SETTLE_ALL pays exactly the debt
     # and the coin arrives a wei short.
-    return currency == STETH or (currency != ZERO and balance(currency, hooks.POOL_MANAGER) < 2 * amount)
+    return currency == STETH or (currency != ZERO and balance(currency, CHAIN.pool_manager) < 2 * amount)
 
 
 def stray(case, currency, i):

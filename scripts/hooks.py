@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import boa
@@ -19,11 +20,8 @@ from vyper.compiler.output import build_abi_output
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+from chains import CHAINS, load_deployment, save_deployment  # noqa: E402, F401
 from networks import ETHERSCAN_API_KEY  # noqa: E402
-
-POOL_MANAGER = "0x000000000004444c5dc75cB358380D2e3dE08A90"
-STABLESWAP_NG_FACTORY = "0x6A8cbed756804B16E05E741eDaBd5cB544AE21bf"
-TWOCRYPTO_NG_FACTORY = "0x98EE851a00abeE0d95D08cF4CA2BdCE32aeaAF7F"
 
 # v4-core Hooks.sol permission bits, read from the low 14 bits of the hook address
 BEFORE_INITIALIZE = 1 << 13
@@ -39,7 +37,8 @@ KIND_RECEIVED = 2
 KIND_GET_DX = 4
 
 KEYSTORE = Path("~/.brownie/accounts/babe.json").expanduser()
-DEPLOYMENTS = ROOT / "deployments.json"
+# boa casts every clone the factory creates to the implementation it forwards to
+warnings.filterwarnings("ignore", message="casted bytecode does not match compiled bytecode")
 # relative to ROOT: these paths end up in verified sources
 HOOK_SOURCE = "contracts/CurveHook.vy"
 FACTORY_SOURCE = "contracts/CurveHookFactory.vy"
@@ -60,26 +59,13 @@ def load_account(keystore: Path):
     return Account.from_key(Account.decrypt(encrypted, getpass.getpass(f"Password for {keystore}: ")))
 
 
-def chain_id(rpc_url) -> int:
-    r = requests.post(rpc_url, json={"jsonrpc": "2.0", "id": 1, "method": "eth_chainId", "params": []}, timeout=30)
-    return int(r.json()["result"], 16)
+def factory_ctor_args(chain, implementation, admin):
+    return [chain.pool_manager, implementation, chain.stableswap_ng_factory, chain.twocrypto_ng_factory, admin]
 
 
-def load_deployment(chain_id: int) -> dict:
-    if DEPLOYMENTS.exists():
-        return json.loads(DEPLOYMENTS.read_text()).get(str(chain_id), {})
-    return {}
-
-
-def save_deployment(chain_id: int, **addresses):
-    data = json.loads(DEPLOYMENTS.read_text()) if DEPLOYMENTS.exists() else {}
-    data.setdefault(str(chain_id), {}).update(addresses)
-    DEPLOYMENTS.write_text(json.dumps(data, indent=2) + "\n")
-
-
-def deploy_factory(admin, stableswap_ng=STABLESWAP_NG_FACTORY, twocrypto_ng=TWOCRYPTO_NG_FACTORY):
-    implementation = contract(HOOK_SOURCE).deploy(POOL_MANAGER)
-    factory = contract(FACTORY_SOURCE).deploy(POOL_MANAGER, implementation, stableswap_ng, twocrypto_ng, admin)
+def deploy_factory(admin, chain=CHAINS[1]):
+    implementation = contract(HOOK_SOURCE).deploy(chain.pool_manager)
+    factory = contract(FACTORY_SOURCE).deploy(*factory_ctor_args(chain, implementation, admin))
     return implementation, factory
 
 
@@ -121,27 +107,27 @@ def pool_id(key) -> str:
 ETHERSCAN_API = "https://api.etherscan.io/v2/api"
 
 
-def etherscan(**params):
-    return requests.get(ETHERSCAN_API, timeout=30, params={"chainid": 1, "apikey": ETHERSCAN_API_KEY, **params}).json()
+def etherscan(chain_id, **params):
+    return requests.get(ETHERSCAN_API, timeout=30, params={"chainid": chain_id, "apikey": ETHERSCAN_API_KEY, **params}).json()
 
 
-def is_verified(address) -> bool:
-    return bool(etherscan(module="contract", action="getsourcecode", address=address)["result"][0]["SourceCode"])
+def is_verified(address, chain_id) -> bool:
+    return bool(etherscan(chain_id, module="contract", action="getsourcecode", address=address)["result"][0]["SourceCode"])
 
 
-def ctor_args_on_chain(address, source) -> bytes:
+def ctor_args_on_chain(address, source, chain_id) -> bytes:
     """Constructor arguments of a deployed contract: its creation code past the compiled init code."""
-    creation = etherscan(module="contract", action="getcontractcreation", contractaddresses=address)["result"][0]
+    creation = etherscan(chain_id, module="contract", action="getcontractcreation", contractaddresses=address)["result"][0]
     creation_code = bytes.fromhex(creation["creationBytecode"][2:])
     initcode = contract(source).compiler_data.bytecode
     assert creation_code.startswith(initcode), f"{address} was not compiled from {source} as it is now"
     return creation_code[len(initcode):]
 
 
-def verify_etherscan(address, source, name, ctor_args: bytes):
+def verify_etherscan(address, source, name, ctor_args: bytes, chain_id):
     std_json = contract(source).solc_json
     payload = {k: std_json[k] for k in ("language", "sources", "settings")}
-    params = {"chainid": 1, "module": "contract", "apikey": ETHERSCAN_API_KEY}
+    params = {"chainid": chain_id, "module": "contract", "apikey": ETHERSCAN_API_KEY}
     # Etherscan cannot find a contract for a while after it is mined
     for _ in range(12):
         r = requests.post(ETHERSCAN_API, params={**params, "action": "verifysourcecode"}, data={
@@ -162,7 +148,7 @@ def verify_etherscan(address, source, name, ctor_args: bytes):
         return
     for _ in range(20):
         time.sleep(5)
-        status = etherscan(module="contract", action="checkverifystatus", guid=r["result"])
+        status = etherscan(chain_id, module="contract", action="checkverifystatus", guid=r["result"])
         if "Pending" not in status["result"]:
             print(f"{name}: Etherscan:", status["result"])
             return

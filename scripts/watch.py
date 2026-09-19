@@ -5,6 +5,7 @@
     uv run python scripts/watch.py HOOK [HOOK ...]          # just these hooks
     uv run python scripts/watch.py --from-block 26000000    # history from a given block
     uv run python scripts/watch.py --no-follow              # history only
+    uv run python scripts/watch.py --network robinhood      # another chain
 
 History starts at the factory's (or the hooks') deployment block unless --from-block is
 given, then new blocks are followed and hooks the factory creates are picked up as they appear.
@@ -23,14 +24,12 @@ from eth_hash.auto import keccak
 from eth_utils import to_checksum_address
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from networks import ETHERSCAN_API_KEY, NETWORK  # noqa: E402
+import chains  # noqa: E402
+from networks import ETHERSCAN_API_KEY  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
 TOPIC = "0x" + keccak(b"CurveHookSwap(address,address,bool,bool,uint256,uint256)").hex()
 ZERO = "0x0000000000000000000000000000000000000000"
-KNOWN = {
-    "0x66a9893cc07d91d95644aedd05d03f95e1dba8af": "UniversalRouter",
-}
+KNOWN = {c.universal_router.lower(): "UniversalRouter" for c in chains.CHAINS.values()}
 CHUNK = 10_000  # blocks per eth_getLogs request; halved on node errors
 
 
@@ -74,9 +73,9 @@ def label(address):
     return KNOWN.get(address.lower(), address)
 
 
-def creation_block(address):
+def creation_block(address, chain_id):
     r = requests.get("https://api.etherscan.io/v2/api", timeout=30, params={
-        "chainid": 1, "module": "contract", "action": "getcontractcreation",
+        "chainid": chain_id, "module": "contract", "action": "getcontractcreation",
         "contractaddresses": address, "apikey": ETHERSCAN_API_KEY,
     }).json()
     if r["status"] != "1":
@@ -84,11 +83,9 @@ def creation_block(address):
     return int(r["result"][0]["blockNumber"])
 
 
-def default_factory(rpc):
-    """The factory in deployments.json for the RPC's chain, if any."""
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from hooks import load_deployment
-    factory = load_deployment(int(rpc("eth_chainId"), 16)).get("factory")
+def default_factory(chain_id):
+    """The chain's factory in deployments.json, if any."""
+    factory = chains.load_deployment(chain_id).get("factory")
     return factory and to_checksum_address(factory)
 
 
@@ -209,19 +206,23 @@ def main():
     parser.add_argument("--interval", type=float, default=12, help="seconds between polls when following")
     parser.add_argument("--confirmations", type=int, default=3,
                         help="stay this many blocks behind the reported head (load-balanced nodes lag each other)")
-    parser.add_argument("--rpc", default=NETWORK, help="RPC url (default: NETWORK from networks.py)")
+    parser.add_argument("--network", default="ethereum", choices=sorted(chains.BY_NAME), help="default: ethereum")
+    parser.add_argument("--rpc", help="another RPC for the network's chain")
     opts = parser.parse_args()
 
-    rpc = RPC(opts.rpc)
+    url, chain = chains.resolve(opts.network, opts.rpc)
+    rpc = RPC(url)
     # the factory also resolves hooks given by address; hooks it does not know are standalone ones
-    factory = to_checksum_address(opts.factory) if opts.factory else default_factory(rpc)
+    factory = to_checksum_address(opts.factory) if opts.factory else default_factory(chain.chain_id)
     if not factory and not opts.hooks:
-        parser.error("no factory in deployments.json: pass --factory or hook addresses")
+        parser.error(f"no {chain.name} factory in deployments.json: pass --factory or hook addresses")
 
     if opts.from_block is not None:
         start = opts.from_block
+    elif opts.hooks:
+        start = min(creation_block(h, chain.chain_id) for h in opts.hooks)
     else:
-        start = min(creation_block(h) for h in opts.hooks) if opts.hooks else creation_block(factory)
+        start = creation_block(factory, chain.chain_id)
     watcher = Watcher(rpc, start, factory, opts.hooks, follow_factory=not opts.hooks)
     print(f"{'hooks' if opts.hooks else 'factory ' + factory} from block {start}\n", flush=True)
 

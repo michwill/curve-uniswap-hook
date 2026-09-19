@@ -3,7 +3,9 @@ import boa
 import pytest
 
 import hooks
-from conftest import ZERO, fund
+from conftest import CHAIN, ZERO, fund
+
+pytestmark = pytest.mark.skipif(CHAIN.chain_id != 1, reason="built on Ethereum pools")
 
 USDC_USDT = "0x4f493B7dE8aAC7d55F71853688b1F7C8F0243C85"  # stableswap-ng
 THREEPOOL = "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7"  # DAI/USDC/USDT
@@ -81,7 +83,7 @@ def test_before_swap_only_pool_manager(factory, hook):
 
 
 def test_add_liquidity_blocked(factory, hook):
-    with boa.env.prank(hooks.POOL_MANAGER), boa.reverts("liquidity is in Curve"):
+    with boa.env.prank(CHAIN.pool_manager), boa.reverts("liquidity is in Curve"):
         hook.beforeAddLiquidity(boa.env.eoa, factory.pool_key(hook.address), (-10, 10, 10**18, b"\x00" * 32), b"")
 
 

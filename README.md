@@ -36,24 +36,35 @@ amountIn, amountOut)` for tracking (`sender` is the contract that called
 
 ```
 uv sync
-cp scripts/networks.example.py scripts/networks.py   # then fill in NETWORK and ETHERSCAN_API_KEY
-uv run pytest                                        # fork tests against NETWORK
+cp scripts/networks.example.py scripts/networks.py   # then fill in the RPCs and ETHERSCAN_API_KEY
+uv run pytest                                        # fork tests on Ethereum
+uv run pytest --network robinhood                    # fork tests on Robinhood Chain
 ```
 
-`NETWORK` is an Ethereum mainnet RPC. Transactions are signed with the brownie
-keystore `~/.brownie/accounts/babe.json` (password prompt); pass `--keystore`
-to use another one. Private keys are never read from the environment.
+Every script takes `--network` (default `ethereum`), whose RPC comes from
+`NETWORKS` in `scripts/networks.py`; that file is gitignored, so private RPC
+URLs stay local. Each chain's Uniswap v4 and Curve factory addresses are in
+`scripts/chains.py`: Ethereum and Robinhood Chain for now, and another chain is
+one more entry there. `--rpc` points a script at another RPC for the same chain,
+such as an anvil fork.
+
+Transactions are signed with the brownie keystore
+`~/.brownie/accounts/babe.json` (password prompt); pass `--keystore` to use
+another one. Private keys are never read from the environment.
 
 ## Deploy the factory
 
 ```
-uv run python scripts/deploy.py           # dry run on a fork of NETWORK
-uv run python scripts/deploy.py --live    # deploy
+uv run python scripts/deploy.py                              # dry run on a fork of Ethereum
+uv run python scripts/deploy.py --live                       # deploy on Ethereum
+uv run python scripts/deploy.py --network robinhood --live   # deploy on Robinhood Chain
 ```
 
 This deploys the `CurveHook` implementation and `CurveHookFactory` (admin: the
 deployer), verifies both on Etherscan and records the addresses in
-`deployments.json`, which the other scripts read. Commit that file.
+`deployments.json` under the chain id, which the other scripts read. Commit
+that file. A deployment through `--rpc` is neither recorded nor verified: an
+anvil fork reports the chain id it forks and would overwrite that chain's entry.
 If a verification does not go through, `uv run python scripts/verify.py`
 retries whatever in `deployments.json` is not verified yet.
 
@@ -63,6 +74,7 @@ retries whatever in `deployments.json` is not verified yet.
 uv run python scripts/create_hook.py POOL                # coins 0 and 1, dry run on a fork
 uv run python scripts/create_hook.py POOL --coins 1 2    # another pair of a 3+ coin pool
 uv run python scripts/create_hook.py POOL --live         # create it
+uv run python scripts/create_hook.py POOL --network robinhood --live
 ```
 
 The script mines the CREATE2 salt that gives the clone its hook flags (about
@@ -88,8 +100,8 @@ uv run python scripts/list_hooks.py --txs    # plus every swap through each hook
 uv run python scripts/watch.py               # print swaps as they happen, with a per-origin summary
 ```
 
-Both default to the factory in `deployments.json`; pass `--factory ADDR` or hook
-addresses to look elsewhere. `watch.py` picks up hooks the factory creates while
+Both default to the network's factory in `deployments.json`; pass `--factory ADDR`
+or hook addresses to look elsewhere. `watch.py` picks up hooks the factory creates while
 it runs, and stays a few blocks behind the head (`--confirmations`) because
 load-balanced nodes lag each other.
 
@@ -121,6 +133,7 @@ calling those Curve pools directly.
 ```
 contracts/CurveHook.vy          hook implementation, cloned per pool and coin pair
 contracts/CurveHookFactory.vy   creates, initializes and records hooks
+scripts/chains.py               per-chain addresses, --network, deployments.json
 scripts/hooks.py                shared helpers: deployment, salt mining, Etherscan verification
 scripts/deploy.py               deploy the implementation and factory
 scripts/verify.py               verify them on Etherscan after the fact

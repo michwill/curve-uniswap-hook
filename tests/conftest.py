@@ -7,14 +7,14 @@ from eth_abi import encode
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+import chains  # noqa: E402
 import hooks  # noqa: E402
-from networks import NETWORK  # noqa: E402
 
 ZERO = "0x0000000000000000000000000000000000000000"
 STETH = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
-UNIVERSAL_ROUTER = "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af"
-V4_QUOTER = "0x52F0E24D1c21C8A0cB1e5a5dD6198556BD9E1203"
 PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+# set by pytest_configure for --network, before test modules are imported
+CHAIN = UNIVERSAL_ROUTER = V4_QUOTER = None
 
 # Universal Router command and v4-periphery Actions
 V4_SWAP = 0x10
@@ -24,9 +24,17 @@ SETTLE = 0x0B
 SETTLE_ALL = 0x0C
 TAKE_ALL = 0x0F
 POOL_KEY_T = "(address,address,uint24,int24,address)"
-SINGLE_SWAP_T = f"({POOL_KEY_T},bool,uint128,uint128,bytes)"
 
-boa.fork(NETWORK, block_identifier="latest")
+
+def pytest_addoption(parser):
+    parser.addoption("--network", default="ethereum", choices=sorted(chains.BY_NAME), help="chain to fork (default: ethereum)")
+
+
+def pytest_configure(config):
+    global CHAIN, UNIVERSAL_ROUTER, V4_QUOTER
+    rpc, CHAIN = chains.resolve(config.getoption("network"))
+    UNIVERSAL_ROUTER, V4_QUOTER = CHAIN.universal_router, CHAIN.v4_quoter
+    boa.fork(rpc, block_identifier="latest")
 
 
 @pytest.fixture(scope="session")
@@ -36,7 +44,7 @@ def admin():
 
 @pytest.fixture(scope="session")
 def deployment(admin):
-    return hooks.deploy_factory(admin)
+    return hooks.deploy_factory(admin, CHAIN)
 
 
 @pytest.fixture(scope="session")
@@ -61,7 +69,7 @@ def quoter():
 
 @pytest.fixture(scope="session")
 def pool_manager():
-    return hooks.interface("IPoolManager").at(hooks.POOL_MANAGER)
+    return hooks.interface("IPoolManager").at(CHAIN.pool_manager)
 
 
 @pytest.fixture(scope="session")
@@ -105,7 +113,10 @@ def swap(router, key, zero_for_one, exact_input, amount, limit, sender, prepay=F
     """
     currency_in, currency_out = (key[0], key[1]) if zero_for_one else (key[1], key[0])
     max_in = amount if exact_input else limit
-    single = encode([SINGLE_SWAP_T], [(key, zero_for_one, amount, limit, b"")])
+    if CHAIN.hop_price:  # newer routers take a minimum output/input price per hop, 0 for none
+        single = encode([f"({POOL_KEY_T},bool,uint128,uint128,uint256,bytes)"], [(key, zero_for_one, amount, limit, 0, b"")])
+    else:
+        single = encode([f"({POOL_KEY_T},bool,uint128,uint128,bytes)"], [(key, zero_for_one, amount, limit, b"")])
     action = SWAP_EXACT_IN_SINGLE if exact_input else SWAP_EXACT_OUT_SINGLE
     min_out = limit if exact_input else amount
     if prepay:

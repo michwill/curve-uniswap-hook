@@ -3,15 +3,16 @@
     uv run python scripts/create_hook.py POOL               # coins 0 and 1, dry run on a fork
     uv run python scripts/create_hook.py POOL --coins 1 2   # another pair of a 3+ coin pool
     uv run python scripts/create_hook.py POOL --live        # real transaction from the KEYSTORE account
+    uv run python scripts/create_hook.py POOL --network robinhood --live
 
-Uses the factory in deployments.json; a dry run without one deploys a fresh factory on the fork.
+Uses the network's factory in deployments.json; a dry run without one deploys a fresh factory on the fork.
 """
 import argparse
 
 import boa
 
+import chains
 import hooks
-from networks import NETWORK
 
 
 def describe(kind):
@@ -26,26 +27,28 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("pool", help="Curve pool address")
     parser.add_argument("--coins", type=int, nargs=2, default=(0, 1), metavar=("I", "J"), help="Curve coin indices")
-    parser.add_argument("--live", action="store_true", help="send the transaction to --rpc")
-    parser.add_argument("--rpc", default=NETWORK, help="RPC url (default: NETWORK from networks.py)")
+    parser.add_argument("--network", default="ethereum", choices=sorted(chains.BY_NAME), help="default: ethereum")
+    parser.add_argument("--rpc", help="another RPC for the network's chain, e.g. an anvil fork")
+    parser.add_argument("--live", action="store_true", help="send the transaction")
     parser.add_argument("--keystore", type=hooks.Path, default=hooks.KEYSTORE,
                         help=f"sender keystore (default: {hooks.KEYSTORE})")
     opts = parser.parse_args()
+    rpc, chain = chains.resolve(opts.network, opts.rpc)
 
-    deployment = hooks.load_deployment(hooks.chain_id(opts.rpc))
+    deployment = chains.load_deployment(chain.chain_id)
     if opts.live:
         if "factory" not in deployment:
-            parser.error("no factory in deployments.json: run scripts/deploy.py --live first")
-        boa.set_network_env(opts.rpc)
+            parser.error(f"no {chain.name} factory in deployments.json: run scripts/deploy.py --live first")
+        boa.set_network_env(rpc)
         boa.env.add_account(hooks.load_account(opts.keystore), force_eoa=True)
     else:
-        boa.fork(opts.rpc, block_identifier="latest")
+        boa.fork(rpc, block_identifier="latest")
 
     if "factory" in deployment:
         factory = hooks.contract(hooks.FACTORY_SOURCE).at(deployment["factory"])
     else:
-        _, factory = hooks.deploy_factory(boa.env.eoa)
-        print(f"deployed a fresh factory on the fork: {factory.address}")
+        _, factory = hooks.deploy_factory(boa.env.eoa, chain)
+        print(f"deployed a fresh factory on the {chain.name} fork: {factory.address}")
 
     i, j = opts.coins
     existing = factory.get_hook(opts.pool, i, j)
