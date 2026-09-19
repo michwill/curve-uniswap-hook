@@ -1,0 +1,9 @@
+@external
+@view
+def get_dy(i: uint256, j: uint256, dx: uint256) -> uint256:
+    ...
+
+@external
+@view
+def balances(i: uint256) -> uint256:
+    ...

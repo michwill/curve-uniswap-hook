@@ -10,3 +10,7 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # boa casts every clone the factory creates to the implementation it forwards to
+    "ignore:casted bytecode does not match compiled bytecode",
+]

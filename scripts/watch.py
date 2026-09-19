@@ -1,9 +1,13 @@
-"""Watch CurveHookSwap events of a deployed CurveHook: who routes through it.
+"""Watch CurveHookSwap events: who routes through the hooks.
 
-    uv run python scripts/watch.py HOOK                         # history since deployment, then follow
-    uv run python scripts/watch.py HOOK --from-block 26000000   # history from a given block
-    uv run python scripts/watch.py HOOK --no-follow             # history only
+    uv run python scripts/watch.py                          # every hook of the factory in deployments.json
+    uv run python scripts/watch.py --factory FACTORY        # every hook of another factory
+    uv run python scripts/watch.py HOOK [HOOK ...]          # just these hooks
+    uv run python scripts/watch.py --from-block 26000000    # history from a given block
+    uv run python scripts/watch.py --no-follow              # history only
 
+History starts at the factory's (or the hooks') deployment block unless --from-block is
+given, then new blocks are followed and hooks the factory creates are picked up as they appear.
 Prints every swap, and a per-(origin, sender) summary after the history scan and on Ctrl-C.
 """
 import argparse
@@ -14,14 +18,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
-from eth_abi import decode
+from eth_abi import decode, encode
 from eth_hash.auto import keccak
 from eth_utils import to_checksum_address
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from networks import ETHERSCAN_API_KEY, NETWORK  # noqa: E402
 
+ROOT = Path(__file__).resolve().parent.parent
 TOPIC = "0x" + keccak(b"CurveHookSwap(address,address,bool,bool,uint256,uint256)").hex()
+ZERO = "0x0000000000000000000000000000000000000000"
 KNOWN = {
     "0x66a9893cc07d91d95644aedd05d03f95e1dba8af": "UniversalRouter",
 }
@@ -42,15 +48,20 @@ class RPC:
             raise RuntimeError(f"{method}: {r['error']}")
         return r["result"]
 
-    def call(self, to, signature, output_type):
-        data = self("eth_call", {"to": to, "data": "0x" + keccak(signature.encode())[:4].hex()}, "latest")
-        return decode([output_type], bytes.fromhex(data[2:]))[0]
+    def call(self, to, signature, output_types, args=()):
+        arg_types = signature[signature.index("(") + 1:-1]
+        data = keccak(signature.encode())[:4] + (encode(arg_types.split(","), list(args)) if args else b"")
+        result = self("eth_call", {"to": to, "data": "0x" + data.hex()}, "latest")
+        return decode(output_types, bytes.fromhex(result[2:]))
 
 
 class Token:
     def __init__(self, rpc, address):
-        self.symbol = rpc.call(address, "symbol()", "string")
-        self.decimals = rpc.call(address, "decimals()", "uint8")
+        if address == ZERO:
+            self.symbol, self.decimals = "ETH", 18
+        else:
+            self.symbol = rpc.call(address, "symbol()", ["string"])[0]
+            self.decimals = rpc.call(address, "decimals()", ["uint8"])[0]
 
     def fmt(self, amount):
         return f"{amount / 10**self.decimals:,.{self.decimals}f} {self.symbol}"
@@ -60,36 +71,67 @@ def label(address):
     return KNOWN.get(address.lower(), address)
 
 
-def creation_block(rpc, hook):
+def creation_block(address):
     r = requests.get("https://api.etherscan.io/v2/api", timeout=30, params={
         "chainid": 1, "module": "contract", "action": "getcontractcreation",
-        "contractaddresses": hook, "apikey": ETHERSCAN_API_KEY,
+        "contractaddresses": address, "apikey": ETHERSCAN_API_KEY,
     }).json()
     if r["status"] != "1":
         raise RuntimeError(f"Etherscan: {r['result']}")
     return int(r["result"][0]["blockNumber"])
 
 
-def get_logs(rpc, hook, start, end):
+def get_logs(rpc, addresses, start, end):
     try:
-        return rpc("eth_getLogs", {"address": hook, "topics": [TOPIC], "fromBlock": hex(start), "toBlock": hex(end)})
+        return rpc("eth_getLogs", {"address": addresses, "topics": [TOPIC], "fromBlock": hex(start), "toBlock": hex(end)})
     except RuntimeError:
         if start == end:
             raise
         mid = (start + end) // 2
-        return get_logs(rpc, hook, start, mid) + get_logs(rpc, hook, mid + 1, end)
+        return get_logs(rpc, addresses, start, mid) + get_logs(rpc, addresses, mid + 1, end)
 
 
 class Watcher:
-    def __init__(self, rpc, hook, start):
+    def __init__(self, rpc, start, factory=None, hooks=()):
         self.rpc = rpc
-        self.hook = hook
-        self.tokens = (Token(rpc, rpc.call(hook, "CURRENCY0()", "address")),
-                       Token(rpc, rpc.call(hook, "CURRENCY1()", "address")))
+        self.factory = factory
         self.last_block = start - 1  # last block fully scanned and printed
+        self.pairs = {}  # hook -> (token0, token1)
+        self.factory_hooks = 0
+        self.tokens = {}
         self.block_times = {}
         # (origin, sender) -> [swaps, volume in per token symbol]
         self.stats = defaultdict(lambda: [0, defaultdict(int)])
+        for hook in hooks:
+            self.add(hook)
+
+    def token(self, address):
+        if address not in self.tokens:
+            self.tokens[address] = Token(self.rpc, address)
+        return self.tokens[address]
+
+    def add(self, hook):
+        hook = to_checksum_address(hook)
+        key = None
+        if self.factory:
+            key = self.rpc.call(self.factory, "pool_key(address)", ["(address,address,uint24,int24,address)"], [hook])[0]
+        if key and to_checksum_address(key[4]) == hook:
+            currencies = key[:2]
+        else:  # not from the factory: the first, single-pool hook
+            currencies = [self.rpc.call(hook, f"CURRENCY{k}()", ["address"])[0] for k in (0, 1)]
+        self.pairs[hook] = tuple(self.token(to_checksum_address(c)) for c in currencies)
+        return self.pairs[hook]
+
+    def refresh(self):
+        """Pick up hooks the factory created since the last look."""
+        if not self.factory:
+            return
+        count = self.rpc.call(self.factory, "hook_count()", ["uint256"])[0]
+        for n in range(self.factory_hooks, count):
+            hook = self.rpc.call(self.factory, "hooks(uint256)", ["address"], [n])[0]
+            token0, token1 = self.add(hook)
+            print(f"hook {to_checksum_address(hook)} ({token0.symbol}/{token1.symbol})", flush=True)
+        self.factory_hooks = count
 
     def timestamp(self, block):
         if block not in self.block_times:
@@ -102,9 +144,10 @@ class Watcher:
 
     def scan(self, end):
         """Scan (last_block, end]. Advances last_block per chunk, so a failed chunk is retried whole."""
+        self.refresh()
         while self.last_block < end:
             chunk_end = min(self.last_block + CHUNK, end)
-            logs = get_logs(self.rpc, self.hook, self.last_block + 1, chunk_end)
+            logs = get_logs(self.rpc, list(self.pairs), self.last_block + 1, chunk_end) if self.pairs else []
             # fetch all timestamps before printing anything, so a failure here prints no duplicates on retry
             for log in logs:
                 self.timestamp(int(log["blockNumber"], 16))
@@ -113,15 +156,17 @@ class Watcher:
             self.last_block = chunk_end
 
     def show(self, log):
+        hook = to_checksum_address(log["address"])
         sender = to_checksum_address("0x" + log["topics"][1][-40:])
         origin = to_checksum_address("0x" + log["topics"][2][-40:])
         zero_for_one, exact_input, amount_in, amount_out = decode(
             ["bool", "bool", "uint256", "uint256"], bytes.fromhex(log["data"][2:])
         )
-        token_in, token_out = self.tokens if zero_for_one else self.tokens[::-1]
+        token_in, token_out = self.pairs[hook] if zero_for_one else self.pairs[hook][::-1]
         block = int(log["blockNumber"], 16)
         print(
             f"{self.timestamp(block)}  block {block}  tx {log['transactionHash']}\n"
+            f"    {self.pairs[hook][0].symbol}/{self.pairs[hook][1].symbol} hook {hook}\n"
             f"    origin {origin}  via {label(sender)}\n"
             f"    {'exact in ' if exact_input else 'exact out'}  "
             f"{token_in.fmt(amount_in)} -> {token_out.fmt(amount_out)}",
@@ -142,8 +187,9 @@ class Watcher:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("hook", help="CurveHook address")
-    parser.add_argument("--from-block", type=int, help="default: hook deployment block (via Etherscan)")
+    parser.add_argument("hooks", nargs="*", help="hook addresses (default: every hook of the factory)")
+    parser.add_argument("--factory", help="CurveHookFactory (default: the one in deployments.json)")
+    parser.add_argument("--from-block", type=int, help="default: factory or hook deployment block (via Etherscan)")
     parser.add_argument("--no-follow", action="store_true", help="exit after the history scan")
     parser.add_argument("--interval", type=float, default=12, help="seconds between polls when following")
     parser.add_argument("--confirmations", type=int, default=3,
@@ -152,11 +198,21 @@ def main():
     opts = parser.parse_args()
 
     rpc = RPC(opts.rpc)
-    hook = to_checksum_address(opts.hook)
-    start = opts.from_block if opts.from_block is not None else creation_block(rpc, hook)
-    watcher = Watcher(rpc, hook, start)
-    tokens = "/".join(t.symbol for t in watcher.tokens)
-    print(f"CurveHook {hook} ({tokens}) from block {start}\n", flush=True)
+    factory = opts.factory
+    if not factory and not opts.hooks:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from hooks import load_deployment
+        factory = load_deployment(int(rpc("eth_chainId"), 16)).get("factory")
+        if not factory:
+            parser.error("no factory in deployments.json: pass --factory or hook addresses")
+    factory = factory and to_checksum_address(factory)
+
+    if opts.from_block is not None:
+        start = opts.from_block
+    else:
+        start = creation_block(factory) if factory else min(creation_block(h) for h in opts.hooks)
+    watcher = Watcher(rpc, start, factory, opts.hooks)
+    print(f"{'factory ' + factory if factory else 'hooks'} from block {start}\n", flush=True)
 
     history_done = False
     try:
